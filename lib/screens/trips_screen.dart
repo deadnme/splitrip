@@ -1,0 +1,123 @@
+import 'package:flutter/material.dart';
+
+import '../db.dart';
+import '../platform/browser.dart';
+import '../format.dart';
+import 'join_screen.dart';
+import 'loading.dart';
+import 'random_pay.dart';
+import 'trip_screen.dart';
+
+class TripsScreen extends StatelessWidget {
+  const TripsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Image.asset('assets/logo.png', height: 36, semanticLabel: 'SpliTrip'),
+        actions: [
+          IconButton(
+            tooltip: 'Quick Random Pay',
+            icon: const Icon(Icons.casino_outlined),
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const QuickRandomScreen())),
+          ),
+          IconButton(
+            tooltip: 'Join trip',
+            icon: const Icon(Icons.qr_code_scanner),
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const JoinScreen())),
+          ),
+        ],
+      ),
+      body: Column(children: [
+        if (isIosBrowserTab)
+          const Card(
+            margin: EdgeInsets.all(12),
+            child: ListTile(
+              leading: Icon(Icons.ios_share),
+              title: Text('Add SpliTrip to your Home Screen'),
+              subtitle: Text('Tap Share, then "Add to Home Screen", and use it from there. '
+                  "Trips in Safari don't carry over to the Home Screen app."),
+            ),
+          ),
+        Expanded(child: _tripList()),
+      ]),
+      floatingActionButton: FloatingActionButton.extended(
+        icon: const Icon(Icons.add),
+        label: const Text('New trip'),
+        onPressed: () => _createTrip(context),
+      ),
+    );
+  }
+
+  Widget _tripList() => StreamBuilder(
+        stream: trips.where('memberUids', arrayContains: uid).snapshots(),
+        builder: (context, snap) {
+          if (snap.hasError) return Center(child: Text('Could not load trips.\n${snap.error}'));
+          if (!snap.hasData) return const Loading('Loading your trips…');
+          final list = snap.data!.docs.map(Trip.new).toList()
+            ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+          if (list.isEmpty) {
+            return const Center(
+              child: Padding(
+                padding: EdgeInsets.all(32),
+                child: Text('No trips yet.\nCreate one, or join with an invite code.', textAlign: TextAlign.center),
+              ),
+            );
+          }
+          return ListView(
+            padding: const EdgeInsets.only(bottom: 88),
+            children: [
+              for (final t in list)
+                ListTile(
+                  leading: CircleAvatar(child: Text(t.name.isEmpty ? '?' : t.name[0].toUpperCase())),
+                  title: Text(t.name),
+                  // Not memberUids.length: that counts devices that joined (every
+                  // reinstall or browser adds one), not the people in the trip.
+                  subtitle: Text(t.currency),
+                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => TripScreen(tripId: t.id))),
+                ),
+            ],
+          );
+        },
+      );
+
+  Future<void> _createTrip(BuildContext context) async {
+    final name = TextEditingController();
+    final me = TextEditingController();
+    var currency = 'PHP';
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text('New trip'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(controller: name, autofocus: true, decoration: const InputDecoration(labelText: 'Trip name')),
+              TextField(controller: me, decoration: const InputDecoration(labelText: 'Your name')),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                initialValue: currency,
+                decoration: const InputDecoration(labelText: 'Currency'),
+                items: [for (final c in currencies) DropdownMenuItem(value: c, child: Text('$c ${currencySymbol(c)}'))],
+                onChanged: (v) => setState(() => currency = v!),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Create')),
+          ],
+        ),
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+    if (name.text.trim().isEmpty || me.text.trim().isEmpty) {
+      showError('Enter a trip name and your name.');
+      return;
+    }
+    final id = createTrip(name.text.trim(), currency, me.text.trim());
+    Navigator.push(context, MaterialPageRoute(builder: (_) => TripScreen(tripId: id)));
+  }
+}

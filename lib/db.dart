@@ -1,0 +1,176 @@
+// Firestore access. Firestore (with its built-in offline cache) is the only
+// store; every write shape here matches firestore.rules.
+import 'dart:math';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+
+final db = FirebaseFirestore.instance;
+String get uid => FirebaseAuth.instance.currentUser!.uid;
+
+final messengerKey = GlobalKey<ScaffoldMessengerState>();
+
+void showError(Object e) =>
+    messengerKey.currentState?.showSnackBar(SnackBar(content: Text('$e')));
+
+/// Writes apply to the local cache at once, but their futures only finish
+/// when the server acknowledges them. Don't await them in the UI (offline the
+/// screen would hang). Just report failures.
+void fire(Future<void> write) => write.catchError(showError);
+
+CollectionReference<Map<String, dynamic>> get trips => db.collection('trips');
+DocumentReference<Map<String, dynamic>> tripRef(String id) => trips.doc(id);
+CollectionReference<Map<String, dynamic>> people(String t) => tripRef(t).collection('people');
+CollectionReference<Map<String, dynamic>> expenses(String t) => tripRef(t).collection('expenses');
+CollectionReference<Map<String, dynamic>> payments(String t) => tripRef(t).collection('payments');
+DocumentReference<Map<String, dynamic>> myMember(String t) => tripRef(t).collection('members').doc(uid);
+
+// No 0/O/1/I/L.
+const _alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+
+String newInviteCode() {
+  final r = Random.secure();
+  return List.generate(8, (_) => _alphabet[r.nextInt(_alphabet.length)]).join();
+}
+
+String normalizeCode(String s) => s.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+
+/// Invite link shown as the trip QR code. Opens the app if installed
+/// (Android App Link), otherwise the web app, straight into joining.
+const appUrl = 'https://splitrip-5fde9.web.app';
+String inviteLink(String code) => '$appUrl/join/$code';
+
+/// Code from a scanned/pasted invite: a full link, or just the code.
+String codeFromInvite(String s) => normalizeCode(RegExp(r'/join/([A-Za-z0-9-]+)').firstMatch(s)?.group(1) ?? s);
+
+Map<String, dynamic> _m(DocumentSnapshot<Map<String, dynamic>> d) => d.data() ?? const {};
+int _int(Object? v) => (v as num?)?.toInt() ?? 0;
+
+class Trip {
+  final String id, name, currency, inviteCode;
+  final List<String> memberUids;
+  Trip(DocumentSnapshot<Map<String, dynamic>> d)
+      : id = d.id,
+        name = _m(d)['name'] ?? '',
+        currency = _m(d)['currency'] ?? 'PHP',
+        inviteCode = _m(d)['inviteCode'] ?? '',
+        memberUids = List<String>.from(_m(d)['memberUids'] ?? const []);
+}
+
+class Person {
+  final String id, name;
+  Person(DocumentSnapshot<Map<String, dynamic>> d)
+      : id = d.id,
+        name = _m(d)['name'] ?? '';
+}
+
+class ExpenseDoc {
+  final String id, title, paidBy, date, category, splitType;
+  final int amount;
+  final Map<String, int> splits, weights;
+  ExpenseDoc(DocumentSnapshot<Map<String, dynamic>> d)
+      : id = d.id,
+        title = _m(d)['title'] ?? '',
+        paidBy = _m(d)['paidBy'] ?? '',
+        date = _m(d)['date'] ?? '',
+        category = _m(d)['category'] ?? 'other',
+        splitType = _m(d)['splitType'] ?? 'equal',
+        amount = _int(_m(d)['amount']),
+        splits = (_m(d)['splits'] as Map? ?? {}).map((k, v) => MapEntry('$k', _int(v))),
+        weights = ((_m(d)['weights'] as Map?) ?? {}).map((k, v) => MapEntry('$k', _int(v)));
+}
+
+class PaymentDoc {
+  final String id, from, to, date;
+  final int amount;
+  PaymentDoc(DocumentSnapshot<Map<String, dynamic>> d)
+      : id = d.id,
+        from = _m(d)['from'] ?? '',
+        to = _m(d)['to'] ?? '',
+        date = _m(d)['date'] ?? '',
+        amount = _int(_m(d)['amount']);
+}
+
+/// One batch: trip + my member doc + my person + invite. Returns the trip id.
+String createTrip(String name, String currency, String myName) {
+  final trip = trips.doc();
+  final person = people(trip.id).doc();
+  final code = newInviteCode();
+  // ponytail: no pre-check for code collisions (31^8 codes). The rules reject
+  // overwriting an existing invite, so a collision fails the batch instead of hijacking.
+  final b = db.batch()
+    ..set(trip, {
+      'name': name,
+      'currency': currency,
+      'createdBy': uid,
+      'inviteCode': code,
+      'createdAt': FieldValue.serverTimestamp(),
+      'memberUids': [uid],
+    })
+    ..set(myMember(trip.id), {'personId': person.id, 'joinedAt': FieldValue.serverTimestamp()})
+    ..set(person, {'name': myName})
+    ..set(db.collection('invites').doc(code), {'tripId': trip.id});
+  fire(b.commit());
+  return trip.id;
+}
+
+/// Local cache first, then the server. Null when the cache doesn't have it.
+Future<DocumentSnapshot<Map<String, dynamic>>?> _cached(DocumentReference<Map<String, dynamic>> ref) async {
+  try {
+    final s = await ref.get(const GetOptions(source: Source.cache));
+    return s.exists ? s : null;
+  } catch (_) {
+    return null; // not cached
+  }
+}
+
+/// Joins by invite code, or just opens the trip if already a member.
+/// Already-joined trips are recognised from the local cache, so the iPhone Home
+/// Screen app (which reopens its invite link on every launch) opens them fast.
+/// Returns (tripId, alreadyMember).
+Future<(String, bool)> joinTrip(String rawCode, {void Function(String step)? onStep}) async {
+  final code = codeFromInvite(rawCode);
+  if (code.length != 8) throw 'Invite codes have 8 characters.';
+  onStep?.call('Finding the trip…');
+  final inviteRef = db.collection('invites').doc(code);
+  final invite = await _cached(inviteRef) ?? await inviteRef.get(const GetOptions(source: Source.server));
+  if (!invite.exists) throw 'No trip found for code $code.';
+  final tripId = invite['tripId'] as String;
+  final cachedTrip = await _cached(tripRef(tripId));
+  if (cachedTrip != null && Trip(cachedTrip).memberUids.contains(uid)) return (tripId, true);
+  onStep?.call('Joining…');
+  try {
+    final t = await tripRef(tripId).get(const GetOptions(source: Source.server));
+    if (t.exists && Trip(t).memberUids.contains(uid)) return (tripId, true);
+  } on FirebaseException catch (e) {
+    if (e.code != 'permission-denied') rethrow;
+  }
+  await (db.batch()
+        ..set(myMember(tripId), {'code': code, 'joinedAt': FieldValue.serverTimestamp()})
+        ..update(tripRef(tripId), {'memberUids': FieldValue.arrayUnion([uid])}))
+      .commit();
+  return (tripId, false);
+}
+
+/// Leave; the last member leaving deletes the trip.
+void leaveTrip(Trip t) {
+  final b = db.batch()..delete(myMember(t.id));
+  if (t.memberUids.length <= 1) {
+    b.delete(tripRef(t.id));
+  } else {
+    b.update(tripRef(t.id), {'memberUids': FieldValue.arrayRemove([uid])});
+  }
+  fire(b.commit());
+}
+
+void setMyPerson(String tripId, String personId) =>
+    fire(myMember(tripId).update({'personId': personId}));
+
+void addMyself(String tripId, String name) {
+  final p = people(tripId).doc();
+  fire((db.batch()
+        ..set(p, {'name': name})
+        ..update(myMember(tripId), {'personId': p.id}))
+      .commit());
+}

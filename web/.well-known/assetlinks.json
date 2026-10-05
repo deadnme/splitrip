@@ -1,0 +1,10 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.splitrip.app",
+      "sha256_cert_fingerprints": ["6C:DC:DB:E5:2E:82:17:71:BD:FB:D2:97:34:94:9D:A3:F3:24:0E:09:42:A5:8B:34:8B:DF:C6:A2:E2:A7:37:19"]
+    }
+  }
+]

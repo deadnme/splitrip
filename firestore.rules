@@ -1,0 +1,86 @@
+rules_version = '2';
+// SpliTrip v3 rules. Every request needs Firebase Auth (anonymous is fine).
+// Access to a trip = caller's uid is in trips/{tripId}.memberUids.
+//
+// Paths:
+//   invites/{code}                 { tripId }
+//   trips/{tripId}                 { name, currency, createdBy, inviteCode, createdAt, memberUids }
+//   trips/{tripId}/members/{uid}   { personId?, code?, joinedAt }
+//   trips/{tripId}/people/{id}
+//   trips/{tripId}/expenses/{id}
+//   trips/{tripId}/payments/{id}
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function me() { return request.auth.uid; }
+    function tripPath(tripId) { return /databases/$(database)/documents/trips/$(tripId); }
+    function memberPath(tripId, uid) { return /databases/$(database)/documents/trips/$(tripId)/members/$(uid); }
+    function invitePath(code) { return /databases/$(database)/documents/invites/$(code); }
+    // Reads: state before the request. Writes: state after the whole batch.
+    function isMember(tripId) { return signedIn() && me() in get(tripPath(tripId)).data.memberUids; }
+    function isMemberAfter(tripId) { return signedIn() && me() in getAfter(tripPath(tripId)).data.memberUids; }
+    function onlyChanged(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
+
+    match /invites/{code} {
+      allow get: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['tripId'])
+        && isMemberAfter(request.resource.data.tripId)
+        && getAfter(tripPath(request.resource.data.tripId)).data.inviteCode == code;
+      allow list, update, delete: if false;
+    }
+
+    match /trips/{tripId} {
+      allow get: if signedIn() && me() in resource.data.memberUids;
+      // Home screen query: where('memberUids', arrayContains, uid)
+      allow list: if signedIn() && me() in resource.data.memberUids;
+
+      // Create batch: trip + members/{me} + invites/{inviteCode} (+ creator's person).
+      allow create: if signedIn()
+        && request.resource.data.createdBy == me()
+        && request.resource.data.memberUids == [me()]
+        && existsAfter(memberPath(tripId, me()))
+        && getAfter(invitePath(request.resource.data.inviteCode)).data.tripId == tripId;
+
+      allow update: if signedIn() && (
+        // Normal edit by a member.
+        (me() in resource.data.memberUids && onlyChanged(['name', 'currency']))
+        // Join: add exactly myself, with a valid member doc in the same batch.
+        || (!(me() in resource.data.memberUids)
+            && onlyChanged(['memberUids'])
+            && request.resource.data.memberUids.toSet() == resource.data.memberUids.toSet().union([me()].toSet())
+            && existsAfter(memberPath(tripId, me())))
+        // Leave: remove exactly myself.
+        || (me() in resource.data.memberUids
+            && onlyChanged(['memberUids'])
+            && request.resource.data.memberUids.toSet() == resource.data.memberUids.toSet().difference([me()].toSet()))
+      );
+
+      // Only the last member leaving deletes the trip.
+      allow delete: if signedIn() && resource.data.memberUids == [me()];
+
+      match /members/{uid} {
+        allow read: if isMember(tripId);
+        allow create: if signedIn() && uid == me()
+          && me() in getAfter(tripPath(tripId)).data.memberUids
+          && (
+            // Creator: the trip is created in this same batch.
+            (!exists(tripPath(tripId)) && getAfter(tripPath(tripId)).data.createdBy == me())
+            // Joiner: must present a code that points at this trip.
+            || ('code' in request.resource.data
+                && get(invitePath(request.resource.data.code)).data.tripId == tripId)
+          );
+        allow update: if signedIn() && uid == me() && isMemberAfter(tripId) && onlyChanged(['personId']);
+        allow delete: if signedIn() && uid == me();
+      }
+
+      match /{sub}/{docId} {
+        allow read: if sub in ['people', 'expenses', 'payments'] && isMember(tripId);
+        allow delete: if sub in ['people', 'expenses', 'payments'] && isMemberAfter(tripId);
+        allow create, update: if sub in ['people', 'expenses', 'payments'] && isMemberAfter(tripId)
+          && (sub != 'expenses' || (request.resource.data.amount is int && request.resource.data.amount > 0 && request.resource.data.splits is map))
+          && (sub != 'payments' || (request.resource.data.amount is int && request.resource.data.amount > 0));
+      }
+    }
+  }
+}
