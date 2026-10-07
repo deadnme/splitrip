@@ -7,6 +7,7 @@ import '../db.dart';
 import '../format.dart';
 import '../money.dart' as money;
 import '../pdf_export.dart';
+import '../theme.dart';
 import 'amount.dart';
 import 'expense_form_screen.dart';
 import 'loading.dart';
@@ -197,7 +198,11 @@ class _ExpensesTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final cur = d.trip!.currency;
     if (d.expenses.isEmpty) {
-      return Center(child: Text(d.people.isEmpty ? 'Add people in the People tab first.' : 'No expenses yet.'));
+      return EmptyState(
+        icon: Icons.receipt_long_outlined,
+        title: 'No expenses yet',
+        body: d.people.isEmpty ? 'Add people in the People tab first.' : 'Tap Expense to add the first one.',
+      );
     }
     final total = d.expenses.fold<int>(0, (s, e) => s + e.amount);
     return ListView(
@@ -240,19 +245,19 @@ class _BalancesTab extends StatelessWidget {
             contentPadding: EdgeInsets.zero,
             title: Text(d.name(e.key) + (e.key == d.myPersonId ? ' (you)' : '')),
             trailing: e.value == 0
-                ? const Text('settled', style: TextStyle(fontWeight: FontWeight.w600))
+                ? Text('settled', style: text.bodyLarge?.copyWith(color: scheme.onSurfaceVariant))
                 : AmountText(
                     e.value.abs(),
                     cur,
                     // Owes rounds up, gets back rounds down: nobody comes up short.
                     e.value > 0 ? Rounding.down : Rounding.up,
                     prefix: e.value > 0 ? 'gets back ' : 'owes ',
-                    style: TextStyle(color: e.value > 0 ? Colors.green : scheme.error, fontWeight: FontWeight.w600),
+                    style: TextStyle(color: e.value > 0 ? gainColor(context) : scheme.error, fontWeight: FontWeight.w600),
                   ),
           ),
         const SizedBox(height: 16),
         Text('Suggested transfers', style: text.titleMedium),
-        if (transfers.isEmpty) const Padding(padding: EdgeInsets.all(8), child: Text('Everyone is settled up!')),
+        if (transfers.isEmpty) const Padding(padding: EdgeInsets.all(8), child: Text('Everyone is settled up.')),
         for (final t in transfers)
           ListTile(
             contentPadding: EdgeInsets.zero,

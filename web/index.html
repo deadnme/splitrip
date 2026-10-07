@@ -41,8 +41,11 @@
     #splash img { width: 180px; }
     #splash .spin { width: 28px; height: 28px; border: 3px solid #c7c4f5; border-top-color: #4f46e5; border-radius: 50%; animation: spin 0.9s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    @media (prefers-color-scheme: dark) { body { background: #131318; } #splash { color: #aaa; } }
+    @media (prefers-color-scheme: dark) { :root:not([data-theme=light]) body { background: #131318; } :root:not([data-theme=light]) #splash { color: #aaa; } }
+    :root[data-theme=dark] body { background: #131318; } :root[data-theme=dark] #splash { color: #aaa; }
   </style>
+  <!-- The in-app sun/moon choice (shared_preferences keeps it in localStorage), so the splash doesn't flash the other theme. -->
+  <script>try { var t = JSON.parse(localStorage.getItem('flutter.theme')); if (t) document.documentElement.dataset.theme = t; } catch (e) {}</script>
 </head>
 <body>
   <div id="splash">

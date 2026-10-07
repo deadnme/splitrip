@@ -240,6 +240,7 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
           ),
           const SizedBox(height: 16),
           SegmentedButton<String>(
+            showSelectedIcon: false, // the check mark wrapped "Equal" onto two lines on phones
             segments: [for (final s in splitTypes.entries) ButtonSegment(value: s.key, label: Text(s.value))],
             selected: {splitType},
             onSelectionChanged: (s) => setState(() => splitType = s.first),

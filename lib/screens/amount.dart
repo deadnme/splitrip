@@ -20,12 +20,15 @@ class AmountText extends StatelessWidget {
           color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
           fontSize: 11,
         );
+    // bodyLarge: a ListTile trailing slot would otherwise shrink it to 11sp.
+    // Tabular figures: digits line up down a column of amounts.
+    const tab = [FontFeature.tabularFigures()];
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: alignEnd ? CrossAxisAlignment.end : CrossAxisAlignment.start,
       children: [
-        Text('$prefix${formatWhole(minor, currency, rounding)}', style: style),
-        if (!isWhole(minor, currency)) Text(formatMoney(minor, currency), style: muted),
+        Text('$prefix${formatWhole(minor, currency, rounding)}', style: Theme.of(context).textTheme.bodyLarge!.merge(style).copyWith(fontFeatures: tab)),
+        if (!isWhole(minor, currency)) Text(formatMoney(minor, currency), style: muted?.copyWith(fontFeatures: tab)),
       ],
     );
   }

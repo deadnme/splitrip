@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 
 import 'db.dart';
@@ -11,6 +12,7 @@ import 'screens/install_screen.dart';
 import 'screens/join_screen.dart';
 import 'screens/loading.dart';
 import 'screens/trips_screen.dart';
+import 'theme.dart';
 
 Future<void> main() async {
   // Web: read real paths like /join/CODE instead of #/ hashes. No-op elsewhere.
@@ -26,30 +28,65 @@ Future<void> main() async {
     persistenceEnabled: true,
     webExperimentalForceLongPolling: lp == null ? isIosWeb : lp == '1',
   );
+  await loadThemeChoice();
   runApp(const SpliTripApp());
 }
 
-class SpliTripApp extends StatelessWidget {
+class SpliTripApp extends StatefulWidget {
   const SpliTripApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    const seed = Color(0xFF4F46E5);
-    return MaterialApp(
-      title: 'SpliTrip',
-      scaffoldMessengerKey: messengerKey,
-      theme: ThemeData(colorSchemeSeed: seed),
-      darkTheme: ThemeData(colorSchemeSeed: seed, brightness: Brightness.dark),
-      themeMode: ThemeMode.system,
-      // Cold start, possibly from an invite link (Android App Link or web URL).
-      onGenerateInitialRoutes: (route) => [MaterialPageRoute(builder: (_) => SignInGate(joinCode: joinCodeFromRoute(route)))],
-      // Invite link opened while the app is already running.
-      onGenerateRoute: (s) {
-        final code = joinCodeFromRoute(s.name);
-        return code == null ? null : MaterialPageRoute(builder: (_) => JoinScreen(initialCode: code));
-      },
-    );
+  State<SpliTripApp> createState() => _SpliTripAppState();
+}
+
+class _SpliTripAppState extends State<SpliTripApp> with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    themeT = makeThemeController(this);
+    WidgetsBinding.instance.addObserver(this);
   }
+
+  @override
+  void didChangePlatformBrightness() => followSystem();
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    themeT.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+        animation: themeT,
+        builder: (context, _) {
+          final theme = themeAt(themeT.value);
+          return MaterialApp(
+            title: 'SpliTrip',
+            scaffoldMessengerKey: messengerKey,
+            // Our own controller animates the theme; the built-in tween would
+            // chase it every frame.
+            theme: theme,
+            themeAnimationStyle: AnimationStyle.noAnimation,
+            // Android nav bar matches the page instead of staying black.
+            builder: (context, child) => AnnotatedRegion<SystemUiOverlayStyle>(
+              value: SystemUiOverlayStyle(
+                systemNavigationBarColor: theme.colorScheme.surface,
+                systemNavigationBarIconBrightness: themeT.value < 0.5 ? Brightness.dark : Brightness.light,
+              ),
+              child: child!,
+            ),
+            // Cold start, possibly from an invite link (Android App Link or web URL).
+            onGenerateInitialRoutes: (route) => [MaterialPageRoute(builder: (_) => SignInGate(joinCode: joinCodeFromRoute(route)))],
+            // Invite link opened while the app is already running.
+            onGenerateRoute: (s) {
+              final code = joinCodeFromRoute(s.name);
+              return code == null ? null : MaterialPageRoute(builder: (_) => JoinScreen(initialCode: code));
+            },
+          );
+        },
+      );
 }
 
 /// "/join/ABCD2345" (with or without host/query) -> "ABCD2345".

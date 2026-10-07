@@ -43,3 +43,35 @@ class _LoadingState extends State<Loading> {
     );
   }
 }
+
+/// Centered icon, title and hint for a list with nothing in it yet.
+class EmptyState extends StatelessWidget {
+  final IconData icon;
+  final String title, body;
+  const EmptyState({super.key, required this.icon, required this.title, required this.body});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(32, 32, 32, 96), // sits a little above center, clear of the FAB
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 56, color: scheme.primary.withValues(alpha: 0.6)),
+            const SizedBox(height: 16),
+            Text(title, style: text.titleMedium),
+            const SizedBox(height: 4),
+            Text(
+              body,
+              textAlign: TextAlign.center,
+              style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

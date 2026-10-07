@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../db.dart';
 import '../platform/browser.dart';
 import '../format.dart';
+import '../theme.dart';
 import 'join_screen.dart';
 import 'loading.dart';
 import 'random_pay.dart';
@@ -17,6 +18,7 @@ class TripsScreen extends StatelessWidget {
       appBar: AppBar(
         title: Image.asset('assets/logo.png', height: 36, semanticLabel: 'SpliTrip'),
         actions: [
+          const ThemeToggle(),
           IconButton(
             tooltip: 'Quick Random Pay',
             icon: const Icon(Icons.casino_outlined),
@@ -58,11 +60,10 @@ class TripsScreen extends StatelessWidget {
           final list = snap.data!.docs.map(Trip.new).toList()
             ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
           if (list.isEmpty) {
-            return const Center(
-              child: Padding(
-                padding: EdgeInsets.all(32),
-                child: Text('No trips yet.\nCreate one, or join with an invite code.', textAlign: TextAlign.center),
-              ),
+            return const EmptyState(
+              icon: Icons.luggage_outlined,
+              title: 'No trips yet',
+              body: 'Create one, or join with an invite code.',
             );
           }
           return ListView(
