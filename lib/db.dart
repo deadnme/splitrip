@@ -25,7 +25,8 @@ DocumentReference<Map<String, dynamic>> tripRef(String id) => trips.doc(id);
 CollectionReference<Map<String, dynamic>> people(String t) => tripRef(t).collection('people');
 CollectionReference<Map<String, dynamic>> expenses(String t) => tripRef(t).collection('expenses');
 CollectionReference<Map<String, dynamic>> payments(String t) => tripRef(t).collection('payments');
-DocumentReference<Map<String, dynamic>> myMember(String t) => tripRef(t).collection('members').doc(uid);
+CollectionReference<Map<String, dynamic>> members(String t) => tripRef(t).collection('members');
+DocumentReference<Map<String, dynamic>> myMember(String t) => members(t).doc(uid);
 
 // No 0/O/1/I/L.
 const _alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -61,9 +62,25 @@ class Trip {
 
 class Person {
   final String id, name;
+  /// The member who claimed this person. Only valid while that member's
+  /// doc still points here; see [personOwner].
+  final String? claimedBy;
   Person(DocumentSnapshot<Map<String, dynamic>> d)
       : id = d.id,
-        name = _m(d)['name'] ?? '';
+        name = _m(d)['name'] ?? '',
+        claimedBy = _m(d)['claimedBy'] as String?;
+}
+
+/// The member (uid) who is this person, or null if nobody in the trip is.
+/// [memberPerson] maps each member's uid to their chosen personId. Mirrors
+/// firestore.rules; the fallback covers people created before claims existed.
+String? personOwner(Person p, Map<String, String> memberPerson) {
+  final c = p.claimedBy;
+  if (c != null && memberPerson[c] == p.id) return c;
+  for (final e in memberPerson.entries) {
+    if (e.value == p.id) return e.key;
+  }
+  return null;
 }
 
 class ExpenseDoc {
@@ -110,7 +127,7 @@ String createTrip(String name, String currency, String myName) {
       'memberUids': [uid],
     })
     ..set(myMember(trip.id), {'personId': person.id, 'joinedAt': FieldValue.serverTimestamp()})
-    ..set(person, {'name': myName})
+    ..set(person, {'name': myName, 'claimedBy': uid})
     ..set(db.collection('invites').doc(code), {'tripId': trip.id});
   fire(b.commit());
   return trip.id;
@@ -241,13 +258,19 @@ Future<void> resumePendingDeletions() async {
   }
 }
 
-void setMyPerson(String tripId, String personId) =>
-    fire(myMember(tripId).update({'personId': personId}));
+void setMyPerson(String tripId, String personId) => fire((db.batch()
+      ..update(myMember(tripId), {'personId': personId})
+      ..update(people(tripId).doc(personId), {'claimedBy': uid}))
+    .commit());
+
+/// People created before claims existed: claim my own on trip open, quietly.
+void claimMyPerson(String tripId, String personId) =>
+    people(tripId).doc(personId).update({'claimedBy': uid}).catchError((_) {});
 
 void addMyself(String tripId, String name) {
   final p = people(tripId).doc();
   fire((db.batch()
-        ..set(p, {'name': name})
+        ..set(p, {'name': name, 'claimedBy': uid})
         ..update(myMember(tripId), {'personId': p.id}))
       .commit());
 }

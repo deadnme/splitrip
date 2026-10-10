@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart' show GetOptions, Query, Source;
 import 'package:flutter/material.dart';
 
 import '../db.dart';
@@ -42,7 +43,7 @@ class TripsScreen extends StatelessWidget {
                   "Trips in Safari don't carry over to the Home Screen app."),
             ),
           ),
-        Expanded(child: _tripList()),
+        const Expanded(child: _TripList()),
       ]),
       floatingActionButton: FloatingActionButton.extended(
         icon: const Icon(Icons.add),
@@ -51,37 +52,6 @@ class TripsScreen extends StatelessWidget {
       ),
     );
   }
-
-  Widget _tripList() => StreamBuilder(
-        stream: trips.where('memberUids', arrayContains: uid).snapshots(),
-        builder: (context, snap) {
-          if (snap.hasError) return Center(child: Text('Could not load trips.\n${snap.error}'));
-          if (!snap.hasData) return const Loading('Loading your trips…');
-          final list = snap.data!.docs.map(Trip.new).toList()
-            ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-          if (list.isEmpty) {
-            return const EmptyState(
-              icon: Icons.luggage_outlined,
-              title: 'No trips yet',
-              body: 'Create one, or join with an invite code.',
-            );
-          }
-          return ListView(
-            padding: const EdgeInsets.only(bottom: 88),
-            children: [
-              for (final t in list)
-                ListTile(
-                  leading: CircleAvatar(child: Text(t.name.isEmpty ? '?' : t.name[0].toUpperCase())),
-                  title: Text(t.name),
-                  // Not memberUids.length: that counts devices that joined (every
-                  // reinstall or browser adds one), not the people in the trip.
-                  subtitle: Text(t.currency),
-                  onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => TripScreen(tripId: t.id))),
-                ),
-            ],
-          );
-        },
-      );
 
   Future<void> _createTrip(BuildContext context) async {
     final name = TextEditingController();
@@ -121,4 +91,66 @@ class TripsScreen extends StatelessWidget {
     final id = createTrip(name.text.trim(), currency, me.text.trim());
     Navigator.push(context, MaterialPageRoute(builder: (_) => TripScreen(tripId: id)));
   }
+}
+
+/// My trips, live. Pull down to restart the listener and re-read the server.
+class _TripList extends StatefulWidget {
+  const _TripList();
+
+  @override
+  State<_TripList> createState() => _TripListState();
+}
+
+class _TripListState extends State<_TripList> {
+  Query<Map<String, dynamic>> get _query => trips.where('memberUids', arrayContains: uid);
+  late var _stream = _query.snapshots();
+
+  Future<void> _refresh() async {
+    setState(() => _stream = _query.snapshots());
+    try {
+      await _query.get(const GetOptions(source: Source.server));
+    } catch (e) {
+      showError('Could not refresh. Check your connection.\n$e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => StreamBuilder(
+        stream: _stream,
+        builder: (context, snap) {
+          if (snap.hasError) {
+            return RefreshIndicator(
+              onRefresh: _refresh,
+              child: ScrollableEmpty(Center(child: Text('Could not load trips. Pull down to retry.\n${snap.error}'))),
+            );
+          }
+          if (!snap.hasData) return const Loading('Loading your trips…');
+          final list = snap.data!.docs.map(Trip.new).toList()
+            ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+          return RefreshIndicator(
+            onRefresh: _refresh,
+            child: list.isEmpty
+                ? const ScrollableEmpty(EmptyState(
+                    icon: Icons.luggage_outlined,
+                    title: 'No trips yet',
+                    body: 'Create one, or join with an invite code.',
+                  ))
+                : ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.only(bottom: 88),
+                    children: [
+                      for (final t in list)
+                        ListTile(
+                          leading: CircleAvatar(child: Text(t.name.isEmpty ? '?' : t.name[0].toUpperCase())),
+                          title: Text(t.name),
+                          // Not memberUids.length: that counts devices that joined (every
+                          // reinstall or browser adds one), not the people in the trip.
+                          subtitle: Text(t.currency),
+                          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => TripScreen(tripId: t.id))),
+                        ),
+                    ],
+                  ),
+          );
+        },
+      );
 }

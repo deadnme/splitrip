@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart' show GetOptions, Source;
 import 'package:firebase_core/firebase_core.dart' show FirebaseException;
 import 'package:flutter/material.dart';
 
@@ -21,6 +22,16 @@ class TripData {
   List<Person> people = [];
   List<ExpenseDoc> expenses = [];
   List<PaymentDoc> payments = [];
+  /// Each current member's uid -> the person they chose.
+  Map<String, String> memberPerson = {};
+
+  String? ownerOf(Person p) => personOwner(p, memberPerson);
+
+  /// Only the member who is this person may rename or remove them.
+  bool canEdit(Person p, String me) {
+    final o = ownerOf(p);
+    return o == null || o == me;
+  }
 
   String name(String personId) =>
       people.where((p) => p.id == personId).firstOrNull?.name ?? '(removed)';
@@ -59,11 +70,24 @@ class _TripScreenState extends State<TripScreen> {
   final d = TripData();
   final _subs = <StreamSubscription>[];
   bool _tripLoaded = false;
+  bool _claimChecked = false;
+  int _generation = 0;
   Object? _error;
 
   @override
   void initState() {
     super.initState();
+    _listenAll();
+  }
+
+  /// (Re)start every listener. A listener that failed stays dead until this runs.
+  void _listenAll() {
+    for (final s in _subs) {
+      s.cancel();
+    }
+    _subs.clear();
+    _error = null;
+    final generation = ++_generation;
     final id = widget.tripId;
     // A trip created a moment ago (writes aren't awaited) can reach the server
     // after its listeners do; the server then denies the listens because the
@@ -77,7 +101,7 @@ class _TripScreenState extends State<TripScreen> {
           _subs.remove(sub);
           if (attempt < 5 && e is FirebaseException && e.code == 'permission-denied') {
             Future.delayed(Duration(milliseconds: 500 << attempt), () {
-              if (mounted) listen(s, onData, attempt + 1);
+              if (mounted && generation == _generation) listen(s, onData, attempt + 1);
             });
           } else if (mounted) {
             setState(() => _error = e);
@@ -91,11 +115,47 @@ class _TripScreenState extends State<TripScreen> {
       _tripLoaded = true;
       d.trip = s.exists ? Trip(s) : null;
     });
-    listen(() => myMember(id).snapshots(), (s) => d.myPersonId = s.data()?['personId'] as String?);
-    listen(() => people(id).snapshots(), (s) => d.people = s.docs.map(Person.new).toList()..sort((a, b) => a.name.compareTo(b.name)));
+    listen(() => myMember(id).snapshots(), (s) {
+      d.myPersonId = s.data()?['personId'] as String?;
+      _claimOnce();
+    });
+    listen(() => members(id).snapshots(), (s) => d.memberPerson = {
+          for (final m in s.docs)
+            if (m.data()['personId'] is String) m.id: m.data()['personId'] as String,
+        });
+    listen(() => people(id).snapshots(), (s) {
+      d.people = s.docs.map(Person.new).toList()..sort((a, b) => a.name.compareTo(b.name));
+      _claimOnce();
+    });
     listen(() => expenses(id).snapshots(), (s) => d.expenses = s.docs.map(ExpenseDoc.new).toList()
       ..sort((a, b) => b.date != a.date ? b.date.compareTo(a.date) : a.title.compareTo(b.title)));
     listen(() => payments(id).snapshots(), (s) => d.payments = s.docs.map(PaymentDoc.new).toList()..sort((a, b) => b.date.compareTo(a.date)));
+  }
+
+  /// Claim my person once if it predates claims (or lost its claim).
+  void _claimOnce() {
+    final mine = d.people.where((p) => p.id == d.myPersonId).firstOrNull;
+    if (_claimChecked || mine == null) return;
+    _claimChecked = true;
+    if (mine.claimedBy != uid) claimMyPerson(widget.tripId, mine.id);
+  }
+
+  /// Pull to refresh: restart listeners and wait for one fresh server read.
+  Future<void> _refresh() async {
+    setState(_listenAll);
+    final id = widget.tripId;
+    const server = GetOptions(source: Source.server);
+    try {
+      await Future.wait([
+        tripRef(id).get(server),
+        members(id).get(server),
+        people(id).get(server),
+        expenses(id).get(server),
+        payments(id).get(server),
+      ]);
+    } catch (e) {
+      showError('Could not refresh. Check your connection.\n$e');
+    }
   }
 
   @override
@@ -171,9 +231,9 @@ class _TripScreenState extends State<TripScreen> {
               ),
             Expanded(
               child: TabBarView(children: [
-                _ExpensesTab(d: d, onOpen: _openExpense),
-                _BalancesTab(d: d),
-                _PeopleTab(d: d),
+                RefreshIndicator(onRefresh: _refresh, child: _ExpensesTab(d: d, onOpen: _openExpense)),
+                RefreshIndicator(onRefresh: _refresh, child: _BalancesTab(d: d)),
+                RefreshIndicator(onRefresh: _refresh, child: _PeopleTab(d: d)),
               ]),
             ),
           ],
@@ -199,14 +259,15 @@ class _ExpensesTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final cur = d.trip!.currency;
     if (d.expenses.isEmpty) {
-      return EmptyState(
+      return ScrollableEmpty(EmptyState(
         icon: Icons.receipt_long_outlined,
         title: 'No expenses yet',
         body: d.people.isEmpty ? 'Add people in the People tab first.' : 'Tap Expense to add the first one.',
-      );
+      ));
     }
     final total = d.expenses.fold<int>(0, (s, e) => s + e.amount);
     return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.only(bottom: 88),
       children: [
         ListTile(
@@ -238,6 +299,7 @@ class _BalancesTab extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
     return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(16),
       children: [
         Text('Balances', style: text.titleMedium),
@@ -344,17 +406,27 @@ class _PeopleTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final tripId = d.trip!.id;
     return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.only(bottom: 88),
       children: [
         for (final p in d.people)
           ListTile(
             leading: CircleAvatar(child: Text(p.name.isEmpty ? '?' : p.name[0].toUpperCase())),
             title: Text(p.name + (p.id == d.myPersonId ? ' (you)' : '')),
+            subtitle: switch (d.ownerOf(p)) {
+              final o? when o != uid => const Text('In the trip'),
+              null when p.claimedBy != null && !d.memberPerson.containsKey(p.claimedBy) => const Text('Left the trip'),
+              _ => null,
+            },
             onTap: () async {
+              if (!d.canEdit(p, uid)) {
+                showError('Only ${p.name} can change their own name.');
+                return;
+              }
               final n = await _prompt(context, 'Rename', p.name);
               if (n != null && n.isNotEmpty) fire(people(tripId).doc(p.id).update({'name': n}));
             },
-            trailing: IconButton(
+            trailing: !d.canEdit(p, uid) ? null : IconButton(
               tooltip: 'Remove',
               icon: const Icon(Icons.delete_outline),
               onPressed: () async {

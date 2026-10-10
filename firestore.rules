@@ -29,6 +29,18 @@ service cloud.firestore {
       let trip = get(tripPath(tripId)).data;
       return signedIn() && trip.get('deleted', false) && trip.get('deletingBy', '') == me();
     }
+    // A person belongs to the member who claimed them, for as long as that
+    // member's doc still points at them; leaving or switching frees them.
+    function personFree(tripId, personId) {
+      let c = resource.data.get('claimedBy', '');
+      return c == '' || c == me()
+        || !exists(memberPath(tripId, c))
+        || get(memberPath(tripId, c)).data.get('personId', '') != personId;
+    }
+    function validRecord(sub) {
+      return (sub != 'expenses' || (request.resource.data.amount is int && request.resource.data.amount > 0 && request.resource.data.splits is map))
+        && (sub != 'payments' || (request.resource.data.amount is int && request.resource.data.amount > 0));
+    }
     function onlyChanged(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
 
     match /invites/{code} {
@@ -103,12 +115,18 @@ service cloud.firestore {
         allow delete: if (signedIn() && uid == me()) || isDeleting(tripId);
       }
 
+      // One match for all three: rules OR across matches, so a separate
+      // people match could not restrict what this one allows.
       match /{sub}/{docId} {
         allow read: if sub in ['people', 'expenses', 'payments'] && (isMember(tripId) || isDeleting(tripId));
-        allow delete: if sub in ['people', 'expenses', 'payments'] && (isMemberAfter(tripId) || isDeleting(tripId));
-        allow create, update: if sub in ['people', 'expenses', 'payments'] && isMemberAfter(tripId)
-          && (sub != 'expenses' || (request.resource.data.amount is int && request.resource.data.amount > 0 && request.resource.data.splits is map))
-          && (sub != 'payments' || (request.resource.data.amount is int && request.resource.data.amount > 0));
+        allow delete: if (sub in ['expenses', 'payments'] && isMemberAfter(tripId))
+          || (sub == 'people' && isMemberAfter(tripId) && personFree(tripId, docId))
+          || (sub in ['people', 'expenses', 'payments'] && isDeleting(tripId));
+        allow create: if sub in ['people', 'expenses', 'payments'] && isMemberAfter(tripId) && validRecord(sub)
+          && (sub != 'people' || request.resource.data.get('claimedBy', me()) == me());
+        allow update: if sub in ['people', 'expenses', 'payments'] && isMemberAfter(tripId) && validRecord(sub)
+          && (sub != 'people' || (personFree(tripId, docId)
+              && request.resource.data.get('claimedBy', null) in [resource.data.get('claimedBy', null), me()]));
       }
     }
   }

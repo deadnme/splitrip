@@ -152,6 +152,41 @@ test('finished tombstone cannot be deleted or resurrected', async () => {
   await assertFails(deleteDoc(doc(db('alice'),'trips',T)));
   await assertFails(createTrip('alice',T,'NEWC2345'));
 });
+// People: only the member who is a person may rename or remove them.
+const P = 'ptrip', PCODE = 'PEOP2345';
+const person = (uid, pid) => doc(db(uid), 'trips', P, 'people', pid);
+test('people: setup trip with owner claim and a joined member', async () => {
+  await createTrip('carol', P, PCODE);
+  await assertSucceeds(setDoc(person('carol','p1'), {claimedBy:'carol'}, {merge:true}));
+  await join('dave', PCODE, P);
+  const d = db('dave'), b = writeBatch(d);
+  b.set(doc(d, 'trips', P, 'people', 'p2'), {name:'Dave', claimedBy:'dave'});
+  b.update(doc(d, 'trips', P, 'members', 'dave'), {personId:'p2'});
+  await assertSucceeds(b.commit());
+});
+test('people: other member cannot rename a claimed person', () => assertFails(setDoc(person('dave','p1'), {name:'Hacked'}, {merge:true})));
+test('people: other member cannot remove a claimed person', () => assertFails(deleteDoc(person('dave','p1'))));
+test('people: cannot steal a claim', () => assertFails(setDoc(person('dave','p1'), {claimedBy:'dave'}, {merge:true})));
+test('people: cannot create a person claimed by someone else', () => assertFails(setDoc(person('dave','px'), {name:'X', claimedBy:'carol'})));
+test('people: owner can rename themselves', () => assertSucceeds(setDoc(person('carol','p1'), {name:'Carol'}, {merge:true})));
+test('people: anyone can rename an unclaimed person', async () => {
+  await assertSucceeds(setDoc(person('carol','p3'), {name:'Eve (no app)'}));
+  await assertSucceeds(setDoc(person('dave','p3'), {name:'Eve'}, {merge:true}));
+});
+test('people: switching person frees the old one', async () => {
+  const d = db('carol'), b = writeBatch(d);
+  b.update(doc(d, 'trips', P, 'members', 'carol'), {personId:'p3'});
+  b.update(doc(d, 'trips', P, 'people', 'p3'), {claimedBy:'carol'});
+  await assertSucceeds(b.commit());
+  await assertFails(setDoc(person('dave','p3'), {name:'Nope'}, {merge:true}));
+  await assertSucceeds(setDoc(person('dave','p1'), {name:'Old me'}, {merge:true}));
+});
+test('people: leaving frees your person', async () => {
+  await assertFails(setDoc(person('carol','p2'), {name:'Before leave'}, {merge:true}));
+  await leaveOrDelete('dave', P);
+  await assertSucceeds(setDoc(person('carol','p2'), {name:'Dave (left)'}, {merge:true}));
+});
+
 test('simultaneous final departures leave a protected tombstone', async () => {
   const id = 'concurrent-leave', code = 'RACE2345';
   await createTrip('carol',id,code).catch(e => {throw new Error(`create: ${e.message}`);});

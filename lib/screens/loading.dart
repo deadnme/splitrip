@@ -75,3 +75,17 @@ class EmptyState extends StatelessWidget {
     );
   }
 }
+
+/// Lets an empty state be pulled down to refresh, like the list it replaces.
+class ScrollableEmpty extends StatelessWidget {
+  final Widget child;
+  const ScrollableEmpty(this.child, {super.key});
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+        builder: (context, box) => SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          child: SizedBox(height: box.maxHeight, child: child),
+        ),
+      );
+}
