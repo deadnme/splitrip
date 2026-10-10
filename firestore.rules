@@ -17,8 +17,18 @@ service cloud.firestore {
     function memberPath(tripId, uid) { return /databases/$(database)/documents/trips/$(tripId)/members/$(uid); }
     function invitePath(code) { return /databases/$(database)/documents/invites/$(code); }
     // Reads: state before the request. Writes: state after the whole batch.
-    function isMember(tripId) { return signedIn() && me() in get(tripPath(tripId)).data.memberUids; }
-    function isMemberAfter(tripId) { return signedIn() && me() in getAfter(tripPath(tripId)).data.memberUids; }
+    function isMember(tripId) {
+      let trip = get(tripPath(tripId)).data;
+      return signedIn() && !trip.get('deleted', false) && me() in trip.memberUids;
+    }
+    function isMemberAfter(tripId) {
+      let trip = getAfter(tripPath(tripId)).data;
+      return signedIn() && !trip.get('deleted', false) && me() in trip.memberUids;
+    }
+    function isDeleting(tripId) {
+      let trip = get(tripPath(tripId)).data;
+      return signedIn() && trip.get('deleted', false) && trip.get('deletingBy', '') == me();
+    }
     function onlyChanged(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
 
     match /invites/{code} {
@@ -27,24 +37,30 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly(['tripId'])
         && isMemberAfter(request.resource.data.tripId)
         && getAfter(tripPath(request.resource.data.tripId)).data.inviteCode == code;
-      allow list, update, delete: if false;
+      allow delete: if signedIn()
+        && getAfter(tripPath(resource.data.tripId)).data.get('deleted', false)
+        && getAfter(tripPath(resource.data.tripId)).data.get('deletingBy', '') == me();
+      allow list, update: if false;
     }
 
     match /trips/{tripId} {
-      allow get: if signedIn() && me() in resource.data.memberUids;
+      allow get: if signedIn() && (me() in resource.data.memberUids
+        || resource.data.get('deletingBy', '') == me());
       // Home screen query: where('memberUids', arrayContains, uid)
       allow list: if signedIn() && me() in resource.data.memberUids;
 
       // Create batch: trip + members/{me} + invites/{inviteCode} (+ creator's person).
       allow create: if signedIn()
+        && !request.resource.data.keys().hasAny(['deleted', 'deletingBy'])
         && request.resource.data.createdBy == me()
         && request.resource.data.memberUids == [me()]
         && existsAfter(memberPath(tripId, me()))
         && getAfter(invitePath(request.resource.data.inviteCode)).data.tripId == tripId;
 
-      allow update: if signedIn() && (
+      allow update: if signedIn() && !resource.data.get('deleted', false) && (
         // Normal edit by a member.
-        (me() in resource.data.memberUids && onlyChanged(['name', 'currency']))
+        (me() in resource.data.memberUids && onlyChanged(['name', 'currency'])
+            && request.resource.data.currency == resource.data.currency)
         // Join: add exactly myself, with a valid member doc in the same batch.
         || (!(me() in resource.data.memberUids)
             && onlyChanged(['memberUids'])
@@ -52,17 +68,30 @@ service cloud.firestore {
             && existsAfter(memberPath(tripId, me())))
         // Leave: remove exactly myself.
         || (me() in resource.data.memberUids
+            && resource.data.memberUids.size() > 1
             && onlyChanged(['memberUids'])
             && request.resource.data.memberUids.toSet() == resource.data.memberUids.toSet().difference([me()].toSet()))
+        // Last member locks the trip and invalidates its invite atomically.
+        || (resource.data.memberUids == [me()]
+            && request.resource.data.keys().hasOnly(['deleted', 'deletingBy', 'memberUids'])
+            && request.resource.data.deleted == true
+            && request.resource.data.deletingBy == me()
+            && request.resource.data.memberUids == []
+            && !existsAfter(invitePath(resource.data.inviteCode))
+            && !existsAfter(memberPath(tripId, me())))
       );
 
-      // Only the last member leaving deletes the trip.
-      allow delete: if signedIn() && resource.data.memberUids == [me()];
+      // After cleanup, retain only an immutable, non-identifying tombstone.
+      allow update: if isDeleting(tripId)
+        && request.resource.data.keys().hasOnly(['deleted', 'memberUids'])
+        && request.resource.data.deleted == true
+        && request.resource.data.memberUids == [];
+      allow delete: if false;
 
       match /members/{uid} {
-        allow read: if isMember(tripId);
+        allow read: if isMember(tripId) || isDeleting(tripId);
         allow create: if signedIn() && uid == me()
-          && me() in getAfter(tripPath(tripId)).data.memberUids
+          && isMemberAfter(tripId)
           && (
             // Creator: the trip is created in this same batch.
             (!exists(tripPath(tripId)) && getAfter(tripPath(tripId)).data.createdBy == me())
@@ -71,12 +100,12 @@ service cloud.firestore {
                 && get(invitePath(request.resource.data.code)).data.tripId == tripId)
           );
         allow update: if signedIn() && uid == me() && isMemberAfter(tripId) && onlyChanged(['personId']);
-        allow delete: if signedIn() && uid == me();
+        allow delete: if (signedIn() && uid == me()) || isDeleting(tripId);
       }
 
       match /{sub}/{docId} {
-        allow read: if sub in ['people', 'expenses', 'payments'] && isMember(tripId);
-        allow delete: if sub in ['people', 'expenses', 'payments'] && isMemberAfter(tripId);
+        allow read: if sub in ['people', 'expenses', 'payments'] && (isMember(tripId) || isDeleting(tripId));
+        allow delete: if sub in ['people', 'expenses', 'payments'] && (isMemberAfter(tripId) || isDeleting(tripId));
         allow create, update: if sub in ['people', 'expenses', 'payments'] && isMemberAfter(tripId)
           && (sub != 'expenses' || (request.resource.data.amount is int && request.resource.data.amount > 0 && request.resource.data.splits is map))
           && (sub != 'payments' || (request.resource.data.amount is int && request.resource.data.amount > 0));

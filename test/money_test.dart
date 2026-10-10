@@ -4,6 +4,16 @@ import 'package:splitrip/money.dart';
 int sum(Map<String, int> m) => m.values.fold(0, (s, v) => s + v);
 
 void main() {
+  test('weighted products remain exact beyond native and web int ranges', () {
+    const amount = 999999999999;
+    final s = splitWeighted(amount, {'b': 999999999999, 'a': 999999999999});
+    expect(s, {'a': 500000000000, 'b': 499999999999});
+    expect(sum(s), amount);
+    final tied = splitWeighted(17, {for (var i = 39; i >= 0; i--) 'p${i.toString().padLeft(2, '0')}': 1});
+    expect(tied.entries.where((e) => e.value == 1).map((e) => e.key),
+        [for (var i = 0; i < 17; i++) 'p${i.toString().padLeft(2, '0')}']);
+  });
+
   test('equal split puts remainder cents on first sorted ids', () {
     final s = splitEqual(1000, ['c', 'a', 'b']);
     expect(s, {'a': 334, 'b': 333, 'c': 333});

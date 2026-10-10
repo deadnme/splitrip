@@ -3,6 +3,15 @@ import 'package:splitrip/db.dart' show newInviteCode, normalizeCode;
 import 'package:splitrip/format.dart';
 
 void main() {
+  test('money input rejects overflow consistently and accepts the ceiling', () {
+    expect(parseMinor('999999999999999999999999999999', 2), isNull);
+    expect(parseMinor('9999999999.99', 2), maxInputMinor);
+    expect(parseMinor('10000000000.00', 2), isNull);
+    expect(parseMinor('$maxInputMinor', 0), maxInputMinor);
+    expect(parseMinor('1000000000000', 0), isNull);
+    expect(parseMinor('000000000001.25', 2), 125);
+  });
+
   test('parseMinor turns text into int minor units', () {
     expect(parseMinor('12.5', 2), 1250);
     expect(parseMinor('1,234.56', 2), 123456);

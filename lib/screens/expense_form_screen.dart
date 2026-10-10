@@ -79,7 +79,7 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
   Map<String, int>? get _weights {
     final w = <String, int>{};
     for (final id in selected) {
-      final v = splitType == 'percent' ? parseMinor(per[id]!.text, 2) : int.tryParse(per[id]!.text.trim());
+      final v = parseMinor(per[id]!.text, splitType == 'percent' ? 2 : 0);
       if (v == null || v < 0) return null;
       w[id] = v;
     }
@@ -167,7 +167,7 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
       firstDate: DateTime(2000),
       lastDate: DateTime(2100),
     );
-    if (picked != null) setState(() => date = DateFormat('yyyy-MM-dd').format(picked));
+    if (picked != null && mounted) setState(() => date = DateFormat('yyyy-MM-dd').format(picked));
   }
 
   @override
@@ -226,7 +226,7 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
                     ? null
                     : () async {
                         final i = await showRandomPayer(context, [for (final p in widget.people) p.name]);
-                        if (i != null) setState(() => paidBy = widget.people[i].id);
+                        if (i != null && mounted) setState(() => paidBy = widget.people[i].id);
                       },
               ),
             ],

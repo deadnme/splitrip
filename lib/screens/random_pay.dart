@@ -16,7 +16,8 @@ const _colors = [
 class RandomPayWheel extends StatefulWidget {
   final List<String> names;
   final ValueChanged<int> onWinner;
-  const RandomPayWheel({super.key, required this.names, required this.onWinner});
+  final VoidCallback? onSpin;
+  const RandomPayWheel({super.key, required this.names, required this.onWinner, this.onSpin});
 
   @override
   State<RandomPayWheel> createState() => _RandomPayWheelState();
@@ -47,6 +48,7 @@ class _RandomPayWheelState extends State<RandomPayWheel> with TickerProviderStat
   }
 
   void _spin() {
+    widget.onSpin?.call();
     setState(() {
       _busy = true;
       _winner = null;
@@ -239,7 +241,11 @@ Future<int?> showRandomPayer(BuildContext context, List<String> names) {
               Text('Random Pay', style: Theme.of(context).textTheme.titleLarge),
               const Text('Spin to pick who pays. Everyone has an equal chance.'),
               const SizedBox(height: 16),
-              RandomPayWheel(names: names, onWinner: (i) => setState(() => winner = i)),
+              RandomPayWheel(
+                names: names,
+                onSpin: () => setState(() => winner = null),
+                onWinner: (i) => setState(() => winner = i),
+              ),
               const SizedBox(height: 8),
               // The payer only changes when you confirm (old app bug B-21 changed it on spin).
               TextButton(

@@ -8,8 +8,7 @@ import '../format.dart';
 
 class TripSettingsScreen extends StatefulWidget {
   final Trip trip;
-  final bool hasExpenses;
-  const TripSettingsScreen({super.key, required this.trip, required this.hasExpenses});
+  const TripSettingsScreen({super.key, required this.trip});
 
   @override
   State<TripSettingsScreen> createState() => _TripSettingsScreenState();
@@ -17,7 +16,7 @@ class TripSettingsScreen extends StatefulWidget {
 
 class _TripSettingsScreenState extends State<TripSettingsScreen> {
   late final name = TextEditingController(text: widget.trip.name);
-  late String currency = widget.trip.currency;
+  bool _leaving = false;
 
   @override
   Widget build(BuildContext context) {
@@ -68,20 +67,21 @@ class _TripSettingsScreenState extends State<TripSettingsScreen> {
           TextField(controller: name, decoration: const InputDecoration(labelText: 'Trip name')),
           const SizedBox(height: 12),
           DropdownButtonFormField<String>(
-            initialValue: currency,
-            decoration: InputDecoration(
+            initialValue: t.currency,
+            decoration: const InputDecoration(
               labelText: 'Currency',
-              helperText: widget.hasExpenses ? 'Locked once the trip has expenses.' : null,
+              helperText: 'Currency is fixed when a trip is created. Start a new trip to use another currency.',
+              helperMaxLines: 3,
             ),
             items: [for (final c in currencies) DropdownMenuItem(value: c, child: Text('$c ${currencySymbol(c)}'))],
-            onChanged: widget.hasExpenses ? null : (v) => setState(() => currency = v!),
+            onChanged: null,
           ),
           const SizedBox(height: 16),
           FilledButton(
-            onPressed: () {
+            onPressed: _leaving ? null : () {
               final n = name.text.trim();
               if (n.isEmpty) return;
-              fire(tripRef(t.id).update({'name': n, 'currency': currency}));
+              fire(tripRef(t.id).update({'name': n}));
               Navigator.pop(context);
             },
             child: const Text('Save'),
@@ -90,8 +90,8 @@ class _TripSettingsScreenState extends State<TripSettingsScreen> {
           OutlinedButton.icon(
             style: OutlinedButton.styleFrom(foregroundColor: Theme.of(context).colorScheme.error),
             icon: Icon(last ? Icons.delete_forever : Icons.logout),
-            label: Text(last ? 'Delete trip' : 'Leave trip'),
-            onPressed: () async {
+            label: Text(_leaving ? 'Please wait…' : last ? 'Delete trip' : 'Leave trip'),
+            onPressed: _leaving ? null : () async {
               final ok = await showDialog<bool>(
                 context: context,
                 builder: (context) => AlertDialog(
@@ -105,8 +105,15 @@ class _TripSettingsScreenState extends State<TripSettingsScreen> {
                 ),
               );
               if (ok != true || !context.mounted) return;
-              leaveTrip(t);
-              Navigator.popUntil(context, (r) => r.isFirst);
+              setState(() => _leaving = true);
+              try {
+                await leaveTrip(t);
+                if (context.mounted) Navigator.popUntil(context, (r) => r.isFirst);
+              } catch (e) {
+                showError(e);
+              } finally {
+                if (mounted) setState(() => _leaving = false);
+              }
             },
           ),
         ],

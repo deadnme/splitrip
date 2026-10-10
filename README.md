@@ -33,9 +33,11 @@ firebase emulators:exec --only firestore --project demo-splitrip "node tools/rul
 
 ```sh
 flutter build apk --release --split-per-abi   # needs android/key.properties + android/upload-keystore.jks (not in git)
-flutter build web --release
+node tools/build_web.mjs                    # builds web + versioned offline app shell
 firebase deploy --only hosting --project splitrip-5fde9
 firebase deploy --only firestore:rules --project splitrip-5fde9
 ```
 
 The release signing key is not in this repository. Every APK update must be signed with the same key, or users have to uninstall, which wipes their login.
+
+For a Flutter SDK outside PATH, pass `--flutter=D:/flutter/bin/flutter.bat` to the web build helper. Extra flags are forwarded to Flutter. Use this helper for every web release: a plain `flutter build web` does not prepare the offline cache manifest. The worker caches one complete build and activates updates after all SpliTrip tabs/windows close. First use still needs internet for anonymous sign-in; previously opened trips use Firestore's offline cache. Firebase SDK modules and fallback fonts are cached as used. Offline QR scanning and PDF generation are not guaranteed until their external resources have loaded online.

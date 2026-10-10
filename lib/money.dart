@@ -15,18 +15,21 @@ Map<String, int> splitEqual(int amount, List<String> ids) {
 Map<String, int> splitWeighted(int amount, Map<String, int> weights) {
   final ids = weights.keys.where((k) => weights[k]! > 0).toList()..sort();
   if (ids.isEmpty) throw ArgumentError('no positive weights');
-  final total = ids.fold<int>(0, (s, k) => s + weights[k]!);
+  final total = ids.fold<BigInt>(BigInt.zero, (s, k) => s + BigInt.from(weights[k]!));
   final out = <String, int>{};
-  final rems = <String, int>{};
+  final rems = <String, BigInt>{};
   var given = 0;
   for (final k in ids) {
-    final exact = amount * weights[k]!;
-    out[k] = exact ~/ total;
+    final exact = BigInt.from(amount) * BigInt.from(weights[k]!);
+    out[k] = (exact ~/ total).toInt();
     rems[k] = exact % total;
     given += out[k]!;
   }
-  // Ties broken by id order (stable sort keeps the sorted order).
-  final byRem = [...ids]..sort((a, b) => rems[b]!.compareTo(rems[a]!));
+  // Explicitly break ties by id; List.sort does not promise stability.
+  final byRem = [...ids]..sort((a, b) {
+    final byRemainder = rems[b]!.compareTo(rems[a]!);
+    return byRemainder == 0 ? a.compareTo(b) : byRemainder;
+  });
   for (var i = 0; i < amount - given; i++) {
     out[byRem[i]] = out[byRem[i]]! + 1;
   }

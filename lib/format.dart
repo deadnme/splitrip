@@ -70,9 +70,14 @@ String formatWhole(int minor, String currency, Rounding r, {bool code = false}) 
 
 final _num = RegExp(r'^(\d*)(?:\.(\d*))?$');
 
+// ponytail: a trillion minor units per input leaves headroom for trip totals
+// in JavaScript's exact integer range; revisit for non-trip accounting.
+const maxInputMinor = 999999999999;
+
 /// Parses user text like "12.5" into minor units (1250 for 2 digits).
-/// Returns null for empty/invalid text or more decimals than allowed.
+/// Returns null for invalid text, excess decimals, or amounts over the limit.
 int? parseMinor(String text, int digits) {
+  if (digits < 0 || digits > 3) return null;
   final t = text.trim().replaceAll(',', '');
   final m = _num.firstMatch(t);
   if (m == null) return null;
@@ -80,8 +85,8 @@ int? parseMinor(String text, int digits) {
   final frac = m.group(2) ?? '';
   if (whole.isEmpty && frac.isEmpty) return null;
   if (frac.length > digits) return null;
-  return (whole.isEmpty ? 0 : int.parse(whole)) * _pow10(digits) +
-      (frac.isEmpty ? 0 : int.parse(frac.padRight(digits, '0')));
+  final value = BigInt.parse('${whole.isEmpty ? '0' : whole}${frac.padRight(digits, '0')}');
+  return value > BigInt.from(maxInputMinor) ? null : value.toInt();
 }
 
 /// Today's date in the device's local time zone, as yyyy-MM-dd.

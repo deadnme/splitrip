@@ -32,17 +32,18 @@ class TripData {
         payments.map((p) => money.Payment(p.from, p.to, p.amount)),
       );
 
-  /// Exact balances, but under one whole unit counts as settled: people pay
-  /// rounded-up amounts, which leaves a few cents behind.
+  /// Ignore small leftovers unless they help settle a larger outstanding debt.
   Map<String, int> get shownBalances {
     final u = wholeUnit(trip!.currency);
-    return balances.map((k, v) => MapEntry(k, v.abs() < u ? 0 : v));
+    final involved = {for (final t in transfers) ...[t.from, t.to]};
+    return balances.map((k, v) => MapEntry(k, v.abs() < u && !involved.contains(k) ? 0 : v));
   }
 
-  /// Suggested transfers, skipping leftovers under one whole unit.
+  /// Skip small leftovers only when both people are below one whole unit.
   List<money.Payment> get transfers {
     final u = wholeUnit(trip!.currency);
-    return money.settleUp(balances).where((t) => t.amount >= u).toList();
+    final b = balances;
+    return money.settleUp(b).where((t) => b[t.from]!.abs() >= u || b[t.to]!.abs() >= u).toList();
   }
 }
 
@@ -149,7 +150,7 @@ class _TripScreenState extends State<TripScreen> {
               icon: const Icon(Icons.settings_outlined),
               onPressed: () => Navigator.push(
                 context,
-                MaterialPageRoute(builder: (_) => TripSettingsScreen(trip: trip, hasExpenses: d.expenses.isNotEmpty)),
+                MaterialPageRoute(builder: (_) => TripSettingsScreen(trip: trip)),
               ),
             ),
           ],

@@ -1,12 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../db.dart';
 import '../platform/browser.dart';
 import 'loading.dart';
 import 'person_picker_screen.dart';
 import 'trip_screen.dart';
+
+// An installed iOS app may retain its original invite as its launch URL.
+// Scope consumption to the identity so a new identity can still join.
+String launchInviteKey(String userId, String code) => 'launchInvite.$userId.${normalizeCode(code)}';
+
+Future<bool> launchInviteConsumed(String userId, String code) async =>
+    (await SharedPreferences.getInstance()).getBool(launchInviteKey(userId, code)) ?? false;
 
 class JoinScreen extends StatefulWidget {
   /// From an invite link: fill it in and join right away.
@@ -34,13 +42,20 @@ class _JoinScreenState extends State<JoinScreen> {
   }
 
   Future<void> _join(String code) async {
-    if (_busy) return;
+    if (!mounted || _busy) return;
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
-      final (tripId, already) = await joinTrip(code, onStep: (s) => setState(() => _step = s));
+      final userId = uid;
+      final (tripId, already) = await joinTrip(code, onStep: (s) {
+        if (mounted) setState(() => _step = s);
+      });
+      if (widget.initialCode != null && isIosWeb && !isIosBrowserTab) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool(launchInviteKey(userId, code), true);
+      }
       if (!mounted) return;
       Navigator.pushReplacement(
         context,
@@ -49,15 +64,22 @@ class _JoinScreenState extends State<JoinScreen> {
         ),
       );
     } catch (e) {
+      if (!mounted) return;
       setState(() => _error = e is String ? e : 'Could not join. Check the code and your connection.\n$e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
+  @override
+  void dispose() {
+    _code.dispose();
+    super.dispose();
+  }
+
   Future<void> _scan() async {
     final code = await Navigator.push<String>(context, MaterialPageRoute(builder: (_) => const _ScanScreen()));
-    if (code != null) {
+    if (mounted && code != null) {
       _code.text = codeFromInvite(code);
       _join(code);
     }
@@ -163,7 +185,7 @@ class _ScanScreenState extends State<_ScanScreen> {
         ),
         onDetect: (capture) {
           final v = capture.barcodes.map((b) => b.rawValue).whereType<String>().firstOrNull;
-          if (_done || v == null || codeFromInvite(v).length != 8) return;
+          if (!mounted || _done || v == null || codeFromInvite(v).length != 8) return;
           _done = true;
           Navigator.pop(context, v);
         },

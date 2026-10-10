@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 final db = FirebaseFirestore.instance;
 String get uid => FirebaseAuth.instance.currentUser!.uid;
@@ -153,15 +154,91 @@ Future<(String, bool)> joinTrip(String rawCode, {void Function(String step)? onS
   return (tripId, false);
 }
 
-/// Leave; the last member leaving deletes the trip.
-void leaveTrip(Trip t) {
-  final b = db.batch()..delete(myMember(t.id));
-  if (t.memberUids.length <= 1) {
-    b.delete(tripRef(t.id));
-  } else {
-    b.update(tripRef(t.id), {'memberUids': FieldValue.arrayRemove([uid])});
+/// Recheck membership on the server: another device may have joined or left
+/// since the settings screen opened. Deletion needs a connection and is awaited.
+Future<void> leaveTrip(Trip t) => _leaveTrip(t.id);
+
+Future<void> _leaveTrip(String tripId) async {
+  final userId = uid;
+  final ref = tripRef(tripId);
+  bool deleting;
+  try {
+    deleting = await _depart(ref, userId);
+  } on FirebaseException catch (e) {
+    // Rules run before the transaction's version check, so when the last two
+    // members leave at once the loser gets permission-denied, not a retried
+    // conflict. One retry on fresh data takes the delete path instead.
+    if (e.code != 'permission-denied') rethrow;
+    deleting = await _depart(ref, userId);
   }
-  fire(b.commit());
+  if (!deleting) return;
+  // Queue only once the trip is locked, so a failed tap never leaves later.
+  final prefs = await SharedPreferences.getInstance();
+  final key = 'pending_trip_deletions_$userId';
+  await prefs.setStringList(key, {...?prefs.getStringList(key), tripId}.toList());
+  for (final sub in ['expenses', 'payments', 'people', 'members']) {
+    while (true) {
+      final page = await ref.collection(sub).limit(400).get(const GetOptions(source: Source.server));
+      if (page.docs.isEmpty) break;
+      final batch = db.batch();
+      for (final document in page.docs) {
+        batch.delete(document.reference);
+      }
+      await batch.commit();
+    }
+  }
+  // Finished tombstones retain no names, invite codes, or user identifiers.
+  await ref.set({'deleted': true, 'memberUids': <String>[]});
+  final remaining = {...?prefs.getStringList(key)}..remove(tripId);
+  await prefs.setStringList(key, remaining.toList());
+}
+
+/// Leaves, or locks the trip for deletion if [userId] is the last member.
+/// Returns true when the trip is locked and its records need cleanup.
+Future<bool> _depart(DocumentReference<Map<String, dynamic>> ref, String userId) =>
+    db.runTransaction<bool>((transaction) async {
+    final snapshot = await transaction.get(ref);
+    final data = snapshot.data();
+    if (data == null) return false;
+    if (data['deleted'] == true) {
+      if (data['deletingBy'] != userId) throw 'This trip is already deleted.';
+      return true; // Resume an interrupted cleanup.
+    }
+    final members = List<String>.from(data['memberUids']);
+    if (!members.contains(userId)) throw 'You have already left this trip.';
+    transaction.delete(ref.collection('members').doc(userId));
+    if (members.length > 1) {
+      transaction.update(ref, {'memberUids': FieldValue.arrayRemove([userId])});
+      return false;
+    }
+    // Never remove this parent ID: otherwise a new trip can expose orphaned
+    // subcollections. Lock all financial writes before deleting them in chunks.
+    transaction.set(ref, {'deleted': true, 'deletingBy': userId, 'memberUids': <String>[]});
+    transaction.delete(db.collection('invites').doc(data['inviteCode'] as String));
+    return true;
+  });
+
+/// Called after sign-in without blocking startup. A killed/offline cleanup is
+/// resumed with the same authenticated identity; errors leave it queued.
+Future<void> resumePendingDeletions() async {
+  final prefs = await SharedPreferences.getInstance();
+  final key = 'pending_trip_deletions_$uid';
+  for (final tripId in List<String>.from(prefs.getStringList(key) ?? const [])) {
+    try {
+      await _leaveTrip(tripId);
+    } on FirebaseException catch (e) {
+      if (e.code == 'permission-denied') {
+        // A prior leave/final cleanup may have reached the server just before
+        // the app was killed, before its local queue entry could be removed.
+        final remaining = {...?prefs.getStringList(key)}..remove(tripId);
+        await prefs.setStringList(key, remaining.toList());
+      } else {
+        showError('Trip deletion will retry when you reopen SpliTrip: $e');
+      }
+    } catch (e) {
+      showError('Trip deletion will retry when you reopen SpliTrip: $e');
+    }
+  }
 }
 
 void setMyPerson(String tripId, String personId) =>

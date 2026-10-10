@@ -1,6 +1,7 @@
 {
     "name": "SpliTrip",
     "short_name": "SpliTrip",
+    "id": "/",
     "scope": "/",
     "display": "standalone",
     "background_color": "#ffffff",

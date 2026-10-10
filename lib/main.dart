@@ -114,15 +114,20 @@ class _SignInGateState extends State<SignInGate> {
     if (auth.currentUser == null) {
       await auth.signInAnonymously().timeout(const Duration(seconds: 15));
     }
+    fire(resumePendingDeletions());
     final code = widget.joinCode;
+    if (code != null && isIosWeb && !isIosBrowserTab && await launchInviteConsumed(uid, code)) return;
     if (code != null && mounted) {
       WidgetsBinding.instance.addPostFrameCallback(
-        (_) => Navigator.push(
+        (_) {
+          if (!mounted) return;
+          Navigator.push(
           context,
           MaterialPageRoute(
             builder: (_) => isIosBrowserTab ? InstallFirstScreen(code: code) : JoinScreen(initialCode: code),
           ),
-        ),
+          );
+        },
       );
     }
   }
