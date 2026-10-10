@@ -7,7 +7,7 @@ const stores = new Map();
 const network = [];
 const source = (await readFile(new URL('../web/splitrip_service_worker.js', import.meta.url), 'utf8'))
   .replace('__SPLITRIP_VERSION__', 'test-build')
-  .replace('__SPLITRIP_FILES__', JSON.stringify(['index.html', 'main.dart.js', 'canvaskit/canvaskit.wasm']));
+  .replace('__SPLITRIP_FILES__', JSON.stringify(['index.html', 'main.dart.js', 'assets/FontManifest.json']));
 const cacheApi = {
   async open(name) {
     if (!stores.has(name)) stores.set(name, new Map());
@@ -53,7 +53,7 @@ assert.equal(stores.has('splitrip-shell-old'), false);
 assert.equal(stores.has('unrelated-app'), true);
 assert.match(await request('https://example.test/app/join/ABCD2345', 'navigate'), /index.html/);
 assert.match(await request('https://example.test/app/main.dart.js?v=2'), /main.dart.js/);
-assert.match(await request('https://example.test/app/canvaskit/canvaskit.wasm'), /canvaskit.wasm/);
+assert.match(await request('https://example.test/app/assets/FontManifest.json'), /FontManifest/);
 assert.equal(await request('https://firestore.googleapis.com/listen'), undefined);
 assert.equal(await request('https://identitytoolkit.googleapis.com/signIn'), undefined);
 assert.equal(await request('https://example.test/app/main.dart.js', 'cors', 'POST'), undefined);
@@ -61,6 +61,10 @@ const sdk = 'https://www.gstatic.com/firebasejs/1.2.3/firebase-app.js';
 assert.equal(await request(sdk), 'network');
 assert.equal(await request(sdk), 'network');
 assert.deepEqual(network, [sdk], 'SDK is reused offline; API responses never enter the cache');
+const renderer = 'https://www.gstatic.com/flutter-canvaskit/abc123/canvaskit.wasm';
+assert.equal(await request(renderer), 'network');
+assert.equal(await request(renderer), 'network');
+assert.equal(network.filter(url => url === renderer).length, 1, 'CDN renderer is fetched once, then served offline');
 // A missing shell entry (partial eviction) falls back to the network.
 stores.get('splitrip-shell-test-build').delete('https://example.test/app/main.dart.js');
 assert.equal(await request('https://example.test/app/main.dart.js'), 'network');

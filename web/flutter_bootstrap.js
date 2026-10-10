@@ -19,9 +19,9 @@ async function startSpliTrip() {
       console.warn('Offline installation unavailable; starting online.', error);
     }
   }
-  await _flutter.loader.load({
-    config: { canvasKitBaseUrl: new URL('canvaskit/', document.baseURI).href },
-  });
+  // CanvasKit comes from gstatic.com/flutter-canvaskit/<engine revision>/:
+  // immutable URLs, so the worker can cache whichever variant this browser uses.
+  await _flutter.loader.load();
 }
 
 startSpliTrip();

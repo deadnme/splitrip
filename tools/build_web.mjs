@@ -27,8 +27,12 @@ async function listFiles(dir, prefix = '') {
   }
   return result;
 }
+// canvaskit/ is skipped: the app loads the one renderer each browser needs from
+// Flutter's versioned CDN, and the worker caches it as used. Precaching all six
+// local variants made the first visit download ~40 MB.
 const files = (await listFiles(output)).filter(file =>
-  !file.endsWith('.map') && !['splitrip_service_worker.js', 'flutter_service_worker.js'].includes(file)
+  !file.endsWith('.map') && !file.endsWith('.symbols') && !file.startsWith('canvaskit/')
+  && !['splitrip_service_worker.js', 'flutter_service_worker.js'].includes(file)
 ).sort();
 const template = await readFile(path.join(project, 'web/splitrip_service_worker.js'), 'utf8');
 const hash = createHash('sha256').update(template);

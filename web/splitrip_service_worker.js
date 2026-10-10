@@ -41,10 +41,10 @@ self.addEventListener('fetch', event => {
     event.respondWith(caches.open(SHELL).then(cache => cache.match(canonical.href)).then(r => r || fetch(request)));
     return;
   }
-  // Only immutable, public SDK/font resources. Never cache auth or database
-  // requests; Firestore manages its own per-user offline persistence.
+  // Only immutable, public SDK/renderer/font resources (versioned URLs). Never
+  // cache auth or database requests; Firestore keeps its own offline cache.
   const publicRuntime = url.protocol === 'https:' && (
-    (url.hostname === 'www.gstatic.com' && url.pathname.startsWith('/firebasejs/')) ||
+    (url.hostname === 'www.gstatic.com' && (url.pathname.startsWith('/firebasejs/') || url.pathname.startsWith('/flutter-canvaskit/'))) ||
     url.hostname === 'fonts.gstatic.com'
   );
   if (publicRuntime) {
